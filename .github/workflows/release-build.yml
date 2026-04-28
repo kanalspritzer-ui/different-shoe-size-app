@@ -1,0 +1,113 @@
+name: Build Release APK
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'package.json'
+      - 'android/**'
+      - '.github/workflows/release-build.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Setup Gradle
+        uses: gradle/gradle-build-action@v3
+      
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
+      
+      - name: Build Release APK
+        run: |
+          cd android
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=app/release.keystore \
+            -Pandroid.injected.signing.store.password="${{ secrets.KEYSTORE_PASSWORD }}" \
+            -Pandroid.injected.signing.key.alias="${{ secrets.KEY_ALIAS }}" \
+            -Pandroid.injected.signing.key.password="${{ secrets.KEY_PASSWORD }}" \
+            --no-daemon
+      
+      - name: Rename APK
+        run: |
+          mv android/app/build/outputs/apk/release/app-release.apk android/app/build/outputs/apk/release/app-release-${GITHUB_SHA:0:7}.apk
+      
+      - name: Get Version
+        id: version
+        run: |
+          VERSION=$(grep '"version"' package.json | head -1 | awk -F'"' '{print $4}')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/') || contains(github.event.head_commit.message, '[release]')
+        with:
+          files: android/app/build/outputs/apk/release/app-release-*.apk
+          draft: false
+          prerelease: false
+          body: |
+            ## Release Notes
+            - **Version**: ${{ steps.version.outputs.version }}
+            - **Build**: ${{ github.sha }}
+            - **Date**: $(date +'%Y-%m-%d')
+            
+            ### What's New
+            - APK built from GitHub Actions
+            - Release signed with production keystore
+            
+            ### Installation
+            Download the APK and install on your Android device
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: android/app/build/outputs/apk/release/app-release-*.apk
+          retention-days: 30
+      
+      - name: Clean Keystore
+        if: always()
+        run: rm -f android/app/release.keystore
+      
+      - name: Build Success Notice
+        if: success()
+        run: |
+          echo "✅ Release APK Build Successful!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📦 APK Location: \`android/app/build/outputs/apk/release/\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📝 Commit Message: ${{ github.event.head_commit.message }}" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Build Failure Notice
+        if: failure()
+        run: |
+          echo "❌ Release APK Build Failed!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ Check that all Secrets are configured:" >> $GITHUB_STEP_SUMMARY
+          echo "- KEYSTORE_BASE64" >> $GITHUB_STEP_SUMMARY
+          echo "- KEYSTORE_PASSWORD" >> $GITHUB_STEP_SUMMARY
+          echo "- KEY_ALIAS" >> $GITHUB_STEP_SUMMARY
+          echo "- KEY_PASSWORD" >> $GITHUB_STEP_SUMMARY
