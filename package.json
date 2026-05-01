@@ -1,6 +1,9 @@
 {
   "name": "different-shoe-size-app",
   "main": "expo-router/entry",
+  "expo": {
+    "plugins": []
+  },
   "version": "1.0.0",
   "scripts": {
     "start": "expo start",
